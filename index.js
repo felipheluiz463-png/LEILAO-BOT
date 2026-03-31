@@ -1,0 +1,335 @@
+import {
+  Client,
+  GatewayIntentBits,
+  REST,
+  Routes,
+  EmbedBuilder,
+  ActionRowBuilder,
+  StringSelectMenuBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  PermissionFlagsBits,
+  ChannelType,
+  OverwriteType,
+} from "discord.js";
+
+// ─── Global error safety ────────────────────────────────────────────────────
+process.on("uncaughtException", (err) => console.error("[uncaughtException]", err));
+process.on("unhandledRejection", (reason) => console.error("[unhandledRejection]", reason));
+
+// ─── Constants ───────────────────────────────────────────────────────────────
+const TOKEN     = process.env.TOKEN;
+const CLIENT_ID = "1488382349472305304";
+const OWNER_ID  = "1030955815114391592"; // Felipe | Kpax — only user allowed to run /setup-auction and use buttons
+const COLOR     = 0xb300ff;
+// Clean permanent URL — no expiry tokens (?ex=...&is=...&hm=...) which expire and break the image
+const IMAGE_URL = "https://cdn.discordapp.com/attachments/1488371511902605482/1488389617647620148/file_000000008870720e9825f146362ee8a53.png";
+
+// ─── Ticket store ─────────────────────────────────────────────────────────────
+// channelId → { creatorId }
+const tickets = new Map();
+
+// ─── Client ──────────────────────────────────────────────────────────────────
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds],
+});
+
+// ─── Register guild command helper ───────────────────────────────────────────
+// Registers /setup-auction as a GUILD command (not global).
+// Guild commands are invisible outside that guild and do not appear for everyone.
+async function registerCommandsForGuild(guild) {
+  try {
+    await guild.commands.set([
+      {
+        name: "setup-auction",
+        description: "Configura o painel de leilão",
+      },
+    ]);
+    console.log(`[BOT] Command registered for guild: ${guild.name} (${guild.id})`);
+  } catch (err) {
+    console.error(`[ERROR] Failed to register command for guild ${guild.id}:`, err.message);
+  }
+}
+
+// ─── Ready ───────────────────────────────────────────────────────────────────
+client.once("clientReady", async () => {
+  console.log(`[BOT] Logged in as ${client.user.tag}`);
+
+  // Wipe any leftover global commands from previous bot versions
+  const rest = new REST().setToken(TOKEN);
+  try {
+    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: [] });
+    console.log("[BOT] Global commands cleared.");
+  } catch (err) {
+    console.error("[ERROR] Failed to clear global commands:", err.message);
+  }
+
+  // Register /setup-auction as a guild-only command in every guild the bot is in
+  for (const guild of client.guilds.cache.values()) {
+    await registerCommandsForGuild(guild);
+  }
+});
+
+// Register guild command when bot joins a new guild
+client.on("guildCreate", async (guild) => {
+  await registerCommandsForGuild(guild);
+});
+
+// ─── Single interactionCreate listener ───────────────────────────────────────
+client.on("interactionCreate", async (interaction) => {
+  try {
+
+    // ── /setup-auction ──────────────────────────────────────────────────────
+    if (interaction.isChatInputCommand() && interaction.commandName === "setup-auction") {
+
+      // Only the owner can use this command
+      if (interaction.user.id !== OWNER_ID) {
+        return interaction.reply({
+          content: "You do not have permission to use this command.",
+          ephemeral: true,
+        });
+      }
+
+      // Defer ephemeral — this hides the "[user] used /setup-auction" message
+      await interaction.deferReply({ ephemeral: true });
+
+      const embed = new EmbedBuilder()
+        .setColor(COLOR)
+        .setTitle("✍️ REALIZAR LEILÃO 💲")
+        .setDescription(
+          "# Como fazer seu Leilão Abaixo!\n\n" +
+          "# Como funciona?\n\n" +
+          "Após o pagamento da taxa de 50c, o Leiloados vai realizar o Leilão, e após o leilão ser finalizado, você deve entregar o item que foi leiloado para o Leiloeiro, e o leiloeiro vai te entregar o dinheiro.\n\n" +
+          "# Oque eu faço?\n\n" +
+          "É necessário falar valor inicial do leilão, mandar imagens dos itens a serem leiloados e falar qual o valor mínimo para os lances.\n\n" +
+          "# Qual o valor para marcar um leilão?\n\n" +
+          "Taxa de 50c para fazer um leilão!!!"
+        )
+        .setImage(IMAGE_URL)
+        .setFooter({ text: "🔥 𝙎𝙣𝙞𝙥𝙚𝙭ˡᵘᵃ ᶜᵒᵐᵐᵘⁿⁱᵗʸ 👻" });
+
+      const selectRow = new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId("select-auctioneer")
+          .setPlaceholder("Selecione um leiloeiro")
+          .addOptions([
+            {
+              label: "Felipe | Kpax",
+              description: "Realizar Leilão com Felipe",
+              value: "felipe",
+            },
+          ])
+      );
+
+      // Send the panel as a bot message — not as command reply — so nobody sees who triggered it
+      await interaction.channel.send({ embeds: [embed], components: [selectRow] });
+
+      // Only visible to the owner
+      await interaction.editReply({ content: "✅ Painel criado com sucesso!" });
+      return;
+    }
+
+    // ── Select menu: choose auctioneer ──────────────────────────────────────
+    if (interaction.isStringSelectMenu() && interaction.customId === "select-auctioneer") {
+      if (interaction.values[0] !== "felipe") return;
+
+      const guild   = interaction.guild;
+      const creator = interaction.user;
+
+      if (!guild) {
+        console.error("[ERROR] interaction.guild is null on select menu");
+        return interaction.reply({ content: "Erro interno: guild não encontrada.", ephemeral: true });
+      }
+
+      // Prevent duplicate tickets
+      for (const [channelId, data] of tickets.entries()) {
+        if (data.creatorId === creator.id) {
+          const existing = guild.channels.cache.get(channelId);
+          if (existing) {
+            return interaction.reply({
+              content: `Você já tem um ticket aberto: <#${channelId}>`,
+              ephemeral: true,
+            });
+          }
+          // Channel no longer exists, clean up
+          tickets.delete(channelId);
+        }
+      }
+
+      await interaction.deferReply({ ephemeral: true });
+
+      // Sanitise channel name (Discord only allows lowercase a-z, 0-9 and hyphens)
+      const safeName = `leilao-${creator.username.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 20) || "user"}`;
+
+      let channel;
+      try {
+        channel = await guild.channels.create({
+          name: safeName,
+          type: ChannelType.GuildText,
+          permissionOverwrites: [
+            // ❌ @everyone cannot see the channel
+            {
+              id: guild.roles.everyone.id,
+              type: OverwriteType.Role,
+              deny: [PermissionFlagsBits.ViewChannel],
+            },
+            // ✔ Ticket creator
+            {
+              id: creator.id,
+              type: OverwriteType.Member,
+              allow: [
+                PermissionFlagsBits.ViewChannel,
+                PermissionFlagsBits.SendMessages,
+                PermissionFlagsBits.ReadMessageHistory,
+              ],
+            },
+            // ✔ Felipe (owner)
+            {
+              id: OWNER_ID,
+              type: OverwriteType.Member,
+              allow: [
+                PermissionFlagsBits.ViewChannel,
+                PermissionFlagsBits.SendMessages,
+                PermissionFlagsBits.ReadMessageHistory,
+                PermissionFlagsBits.ManageChannels,
+              ],
+            },
+            // ✔ Bot itself
+            {
+              id: client.user.id,
+              type: OverwriteType.Member,
+              allow: [
+                PermissionFlagsBits.ViewChannel,
+                PermissionFlagsBits.SendMessages,
+                PermissionFlagsBits.ReadMessageHistory,
+                PermissionFlagsBits.ManageChannels,
+              ],
+            },
+          ],
+        });
+      } catch (err) {
+        console.error("[ERROR] Failed to create ticket channel:", err);
+        return interaction.editReply({ content: "Erro ao criar o canal. Verifique as permissões do bot." });
+      }
+
+      console.log(`[TICKET] Created channel ${channel.id} (${channel.name}) for user ${creator.id}`);
+      tickets.set(channel.id, { creatorId: creator.id });
+
+      // ── EMBED 1: Pix payment (only this embed is sent on ticket creation) ──
+      const pixEmbed = new EmbedBuilder()
+        .setColor(COLOR)
+        .setDescription(
+          "💳 **Pagamento da Taxa do Leilão**\n\n" +
+          "Para iniciar o seu leilão, realize o pagamento da taxa no Pix abaixo:\n\n" +
+          "💵 **Chave Pix**\n" +
+          "`a88da2f9-c136-41ec-86e5-9315312cd3dd`\n\n" +
+          "📌 Após realizar o pagamento, aguarde a confirmação do leiloeiro.\n\n" +
+          "✅ O botão **Confirmar** será utilizado pelo leiloeiro após verificar o recebimento do pagamento.\n\n" +
+          "⚠️ Não envie comprovantes falsos.\n" +
+          "O leilão só será iniciado após a confirmação oficial."
+        )
+        .setFooter({ text: "🔥 𝙎𝙣𝙞𝙥𝙚𝙭ˡᵘᵃ ᶜᵒᵐᵐᵘⁿⁱᵗʸ 👻" });
+
+      const confirmRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("btn-confirmar")
+          .setLabel("Confirmar")
+          .setStyle(ButtonStyle.Success)
+      );
+
+      // Only the Pix embed is sent — Fechar embed appears AFTER Felipe clicks Confirmar
+      await channel.send({ content: `<@${creator.id}> <@${OWNER_ID}>`, embeds: [pixEmbed], components: [confirmRow] });
+
+      await interaction.editReply({ content: `✅ Ticket criado: <#${channel.id}>` });
+      return;
+    }
+
+    // ── Button: Confirmar (Felipe only) ─────────────────────────────────────
+    if (interaction.isButton() && interaction.customId === "btn-confirmar") {
+      if (interaction.user.id !== OWNER_ID) {
+        return interaction.reply({
+          content: "You are not allowed to use this button.",
+          ephemeral: true,
+        });
+      }
+
+      // Delete the Pix embed message so it disappears from the chat
+      await interaction.message.delete();
+
+      // Wait 1 minute before sending the Fechar embed
+      await new Promise((resolve) => setTimeout(resolve, 60 * 1000));
+
+      // Now send the Fechar embed (only appears after Confirmar is clicked)
+      const fecharEmbed = new EmbedBuilder()
+        .setColor(COLOR)
+        .setDescription(
+          "✨ **Atendimento Finalizado?**\n\n" +
+          "Se todas as etapas do leilão já foram concluídas e não há mais pendências, " +
+          "você pode encerrar este ticket com segurança.\n\n" +
+          "📌 **Antes de fechar, verifique se:**\n" +
+          "• O pagamento foi confirmado\n" +
+          "• O item já foi entregue\n" +
+          "• Todas as dúvidas foram resolvidas\n\n" +
+          `🔒 <@${OWNER_ID}> Clique no botão **Fechar** abaixo para encerrar o atendimento.\n\n` +
+          "Obrigado por utilizar nosso sistema de leilões 💎"
+        )
+        .setFooter({ text: "🔥 𝙎𝙣𝙞𝙥𝙚𝙭ˡᵘᵃ ᶜᵒᵐᵐᵘⁿⁱᵗʸ 👻" });
+
+      const closeRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("btn-fechar")
+          .setLabel("Fechar")
+          .setStyle(ButtonStyle.Danger)
+      );
+
+      await interaction.channel.send({ embeds: [fecharEmbed], components: [closeRow] });
+      return;
+    }
+
+    // ── Button: Fechar (Felipe only) ─────────────────────────────────────────
+    if (interaction.isButton() && interaction.customId === "btn-fechar") {
+      if (interaction.user.id !== OWNER_ID) {
+        return interaction.reply({
+          content: "You are not allowed to use this button.",
+          ephemeral: true,
+        });
+      }
+
+      await interaction.deferUpdate();
+
+      const closingEmbed = new EmbedBuilder()
+        .setColor(COLOR)
+        .setDescription(
+          "🔒 **Encerramento do Ticket**\n\n" +
+          "Este ticket foi marcado para encerramento.\n\n" +
+          "📌 Todas as informações relacionadas ao leilão já foram registradas pelo sistema.\n\n" +
+          "🧾 Caso precise revisar algo futuramente, entre em contato com a equipe de suporte.\n\n" +
+          "Agradecemos por utilizar o sistema de leilões 💜\n\n" +
+          "⏳ O canal será fechado em instantes..."
+        )
+        .setFooter({ text: "🔥 𝙎𝙣𝙞𝙥𝙚𝙭ˡᵘᵃ ᶜᵒᵐᵐᵘⁿⁱᵗʸ 👻" });
+
+      await interaction.channel.send({ embeds: [closingEmbed] });
+
+      tickets.delete(interaction.channelId);
+
+      // Wait 5 seconds then delete the channel
+      setTimeout(async () => {
+        try {
+          await interaction.channel.delete();
+          console.log(`[TICKET] Channel ${interaction.channelId} deleted.`);
+        } catch (err) {
+          console.error("[ERROR] Failed to delete channel:", err.message);
+        }
+      }, 5000);
+
+      return;
+    }
+
+  } catch (err) {
+    console.error("[ERROR] interactionCreate:", err);
+  }
+});
+
+// ─── Login ───────────────────────────────────────────────────────────────────
+client.login(TOKEN);
