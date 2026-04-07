@@ -22,8 +22,8 @@ const TOKEN     = process.env.TOKEN;
 const CLIENT_ID = "1488382349472305304";
 const OWNER_ID  = "1030955815114391592"; // Felipe | Kpax — only user allowed to run /setup-auction and use buttons
 const COLOR     = 0xb300ff;
-// Clean permanent URL — no expiry tokens (?ex=...&is=...&hm=...) which expire and break the image
-const IMAGE_URL = "https://cdn.discordapp.com/attachments/1488371511902605482/1488389617647620148/file_000000008870720e9825f146362ee8a53.png";
+// URL SEM parâmetros de expiração (use o attachment ID direto)
+const IMAGE_URL = "https://cdn.discordapp.com/attachments/1381714599442649138/1490162386122965042/file_000000008870720e9825f146362ee8a53.png";
 
 // ─── Ticket store ─────────────────────────────────────────────────────────────
 // channelId → { creatorId }
@@ -35,8 +35,6 @@ const client = new Client({
 });
 
 // ─── Register guild command helper ───────────────────────────────────────────
-// Registers /setup-auction as a GUILD command (not global).
-// Guild commands are invisible outside that guild and do not appear for everyone.
 async function registerCommandsForGuild(guild) {
   try {
     await guild.commands.set([
@@ -55,7 +53,6 @@ async function registerCommandsForGuild(guild) {
 client.once("clientReady", async () => {
   console.log(`[BOT] Logged in as ${client.user.tag}`);
 
-  // Wipe any leftover global commands from previous bot versions
   const rest = new REST().setToken(TOKEN);
   try {
     await rest.put(Routes.applicationCommands(CLIENT_ID), { body: [] });
@@ -64,13 +61,11 @@ client.once("clientReady", async () => {
     console.error("[ERROR] Failed to clear global commands:", err.message);
   }
 
-  // Register /setup-auction as a guild-only command in every guild the bot is in
   for (const guild of client.guilds.cache.values()) {
     await registerCommandsForGuild(guild);
   }
 });
 
-// Register guild command when bot joins a new guild
 client.on("guildCreate", async (guild) => {
   await registerCommandsForGuild(guild);
 });
@@ -82,7 +77,6 @@ client.on("interactionCreate", async (interaction) => {
     // ── /setup-auction ──────────────────────────────────────────────────────
     if (interaction.isChatInputCommand() && interaction.commandName === "setup-auction") {
 
-      // Only the owner can use this command
       if (interaction.user.id !== OWNER_ID) {
         return interaction.reply({
           content: "You do not have permission to use this command.",
@@ -90,7 +84,6 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // Defer ephemeral — this hides the "[user] used /setup-auction" message
       await interaction.deferReply({ ephemeral: true });
 
       const embed = new EmbedBuilder()
@@ -130,10 +123,7 @@ client.on("interactionCreate", async (interaction) => {
           ])
       );
 
-      // Send the panel as a bot message — not as command reply — so nobody sees who triggered it
       await interaction.channel.send({ embeds: [embed], components: [selectRow] });
-
-      // Only visible to the owner
       await interaction.editReply({ content: "✅ Painel criado com sucesso!" });
       return;
     }
@@ -150,7 +140,6 @@ client.on("interactionCreate", async (interaction) => {
         return interaction.reply({ content: "Erro interno: guild não encontrada.", ephemeral: true });
       }
 
-      // Prevent duplicate tickets
       for (const [channelId, data] of tickets.entries()) {
         if (data.creatorId === creator.id) {
           const existing = guild.channels.cache.get(channelId);
@@ -160,14 +149,12 @@ client.on("interactionCreate", async (interaction) => {
               ephemeral: true,
             });
           }
-          // Channel no longer exists, clean up
           tickets.delete(channelId);
         }
       }
 
       await interaction.deferReply({ ephemeral: true });
 
-      // Sanitise channel name (Discord only allows lowercase a-z, 0-9 and hyphens)
       const safeName = `leilao-${creator.username.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 20) || "user"}`;
 
       let channel;
@@ -176,13 +163,11 @@ client.on("interactionCreate", async (interaction) => {
           name: safeName,
           type: ChannelType.GuildText,
           permissionOverwrites: [
-            // ❌ @everyone cannot see the channel
             {
               id: guild.roles.everyone.id,
               type: OverwriteType.Role,
               deny: [PermissionFlagsBits.ViewChannel],
             },
-            // ✔ Ticket creator
             {
               id: creator.id,
               type: OverwriteType.Member,
@@ -192,7 +177,6 @@ client.on("interactionCreate", async (interaction) => {
                 PermissionFlagsBits.ReadMessageHistory,
               ],
             },
-            // ✔ Felipe (owner)
             {
               id: OWNER_ID,
               type: OverwriteType.Member,
@@ -203,7 +187,6 @@ client.on("interactionCreate", async (interaction) => {
                 PermissionFlagsBits.ManageChannels,
               ],
             },
-            // ✔ Bot itself
             {
               id: client.user.id,
               type: OverwriteType.Member,
@@ -224,10 +207,9 @@ client.on("interactionCreate", async (interaction) => {
       console.log(`[TICKET] Created channel ${channel.id} (${channel.name}) for user ${creator.id}`);
       tickets.set(channel.id, { creatorId: creator.id });
 
-      // ── EMBED: Pagamento (com botões Confirmar e Fechar) ──
       const paymentEmbed = new EmbedBuilder()
         .setColor(COLOR)
-        .setTitle("# 💳 Pagamento da Taxa do Leilão")
+        .setTitle("💳 Pagamento da Taxa do Leilão")
         .setDescription(
           "━━━━━━━━━━━━━━━━━━\n\n" +
           "Para iniciar seu leilão, realize o pagamento da taxa utilizando o Pix abaixo:\n\n" +
@@ -254,9 +236,7 @@ client.on("interactionCreate", async (interaction) => {
           .setStyle(ButtonStyle.Danger)
       );
 
-      // Send the embed with both buttons
       await channel.send({ content: `<@${creator.id}> <@${OWNER_ID}>`, embeds: [paymentEmbed], components: [buttonRow] });
-
       await interaction.editReply({ content: `✅ Ticket criado: <#${channel.id}>` });
       return;
     }
@@ -272,7 +252,6 @@ client.on("interactionCreate", async (interaction) => {
 
       await interaction.deferUpdate();
 
-      // Create confirmation embed
       const confirmacaoEmbed = new EmbedBuilder()
         .setColor(COLOR)
         .setDescription(
@@ -283,7 +262,6 @@ client.on("interactionCreate", async (interaction) => {
         )
         .setFooter({ text: "🔥 𝙎𝙣𝙞𝙥𝙚𝙭ˡᵘᵃ ᶜᵒᵐᵐᵘⁿⁱᵗʸ 👻" });
 
-      // Edit the original message to remove buttons and show confirmation
       await interaction.message.edit({ 
         embeds: [interaction.message.embeds[0], confirmacaoEmbed],
         components: [] 
@@ -315,7 +293,6 @@ client.on("interactionCreate", async (interaction) => {
         )
         .setFooter({ text: "🔥 𝙎𝙣𝙞𝙥𝙚𝙭ˡᵘᵃ ᶜᵒᵐᵐᵘⁿⁱᵗʸ 👻" });
 
-      // Disable buttons and send closing message
       const disabledRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId("btn-confirmar")
@@ -334,7 +311,6 @@ client.on("interactionCreate", async (interaction) => {
 
       tickets.delete(interaction.channelId);
 
-      // Wait 5 seconds then delete the channel
       setTimeout(async () => {
         try {
           await interaction.channel.delete();
