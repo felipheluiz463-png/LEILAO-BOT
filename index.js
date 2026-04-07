@@ -95,15 +95,24 @@ client.on("interactionCreate", async (interaction) => {
 
       const embed = new EmbedBuilder()
         .setColor(COLOR)
-        .setTitle("✍️ REALIZAR LEILÃO 💲")
+        .setTitle("🏷️ Como Criar Seu Leilão")
         .setDescription(
-          "# Como fazer seu Leilão Abaixo!\n\n" +
-          "# Como funciona?\n\n" +
-          "Após o pagamento da taxa de 50c, o Leiloados vai realizar o Leilão, e após o leilão ser finalizado, você deve entregar o item que foi leiloado para o Leiloeiro, e o leiloeiro vai te entregar o dinheiro.\n\n" +
-          "# Oque eu faço?\n\n" +
-          "É necessário falar valor inicial do leilão, mandar imagens dos itens a serem leiloados e falar qual o valor mínimo para os lances.\n\n" +
-          "# Qual o valor para marcar um leilão?\n\n" +
-          "Taxa de 50c para fazer um leilão!!!"
+          "━━━━━━━━━━━━━━━━━━\n\n" +
+          "## 📖 Como Funciona?\n\n" +
+          "> - Após o pagamento da **taxa de 50c**, o leiloeiro iniciará o leilão.\n" +
+          "> - Quando o leilão for finalizado, o vencedor será definido.\n" +
+          "> - O vendedor deverá entregar o item ao **Leiloeiro**.\n" +
+          "> - Após a confirmação da entrega, o pagamento será repassado ao vendedor.\n\n" +
+          "━━━━━━━━━━━━━━━━━━\n\n" +
+          "## 📝 O Que Você Precisa Informar\n\n" +
+          "> - 📦 Item que será leiloado\n" +
+          "> - 💰 Valor mínimo inicial\n" +
+          "> - 📈 Valor mínimo de cada lance\n\n" +
+          "━━━━━━━━━━━━━━━━━━\n\n" +
+          "## 💸 Taxa do Leilão\n\n" +
+          "> - Para abrir um leilão é cobrada uma **taxa fixa de 50c**.\n\n" +
+          "━━━━━━━━━━━━━━━━━━\n\n" +
+          "⚠️ O leilão só será iniciado após o pagamento da taxa."
         )
         .setImage(IMAGE_URL)
         .setFooter({ text: "🔥 𝙎𝙣𝙞𝙥𝙚𝙭ˡᵘᵃ ᶜᵒᵐᵐᵘⁿⁱᵗʸ 👻" });
@@ -215,30 +224,38 @@ client.on("interactionCreate", async (interaction) => {
       console.log(`[TICKET] Created channel ${channel.id} (${channel.name}) for user ${creator.id}`);
       tickets.set(channel.id, { creatorId: creator.id });
 
-      // ── EMBED 1: Pix payment (only this embed is sent on ticket creation) ──
-      const pixEmbed = new EmbedBuilder()
+      // ── EMBED: Pagamento (com botões Confirmar e Fechar) ──
+      const paymentEmbed = new EmbedBuilder()
         .setColor(COLOR)
+        .setTitle("# 💳 Pagamento da Taxa do Leilão")
         .setDescription(
-          "💳 **Pagamento da Taxa do Leilão**\n\n" +
-          "Para iniciar o seu leilão, realize o pagamento da taxa no Pix abaixo:\n\n" +
+          "━━━━━━━━━━━━━━━━━━\n\n" +
+          "Para iniciar seu leilão, realize o pagamento da taxa utilizando o Pix abaixo:\n\n" +
           "💵 **Chave Pix**\n" +
           "`a88da2f9-c136-41ec-86e5-9315312cd3dd`\n\n" +
-          "📌 Após realizar o pagamento, aguarde a confirmação do leiloeiro.\n\n" +
-          "✅ O botão **Confirmar** será utilizado pelo leiloeiro após verificar o recebimento do pagamento.\n\n" +
-          "⚠️ Não envie comprovantes falsos.\n" +
-          "O leilão só será iniciado após a confirmação oficial."
+          "━━━━━━━━━━━━━━━━━━\n\n" +
+          "📌 Após efetuar o pagamento, aguarde a confirmação do **Leiloeiro**.\n\n" +
+          "✅ O botão **Confirmar Pagamento** será utilizado apenas pelo leiloeiro após verificar o recebimento.\n\n" +
+          "━━━━━━━━━━━━━━━━━━\n\n" +
+          "⚠️ **Aviso Importante**\n" +
+          "> - Não envie comprovantes falsos.\n" +
+          "> - O leilão só será iniciado após a confirmação oficial do pagamento."
         )
         .setFooter({ text: "🔥 𝙎𝙣𝙞𝙥𝙚𝙭ˡᵘᵃ ᶜᵒᵐᵐᵘⁿⁱᵗʸ 👻" });
 
-      const confirmRow = new ActionRowBuilder().addComponents(
+      const buttonRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId("btn-confirmar")
-          .setLabel("Confirmar")
-          .setStyle(ButtonStyle.Success)
+          .setLabel("Confirmar Pagamento")
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId("btn-fechar")
+          .setLabel("Fechar")
+          .setStyle(ButtonStyle.Danger)
       );
 
-      // Only the Pix embed is sent — Fechar embed appears AFTER Felipe clicks Confirmar
-      await channel.send({ content: `<@${creator.id}> <@${OWNER_ID}>`, embeds: [pixEmbed], components: [confirmRow] });
+      // Send the embed with both buttons
+      await channel.send({ content: `<@${creator.id}> <@${OWNER_ID}>`, embeds: [paymentEmbed], components: [buttonRow] });
 
       await interaction.editReply({ content: `✅ Ticket criado: <#${channel.id}>` });
       return;
@@ -253,36 +270,25 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // Delete the Pix embed message so it disappears from the chat
-      await interaction.message.delete();
+      await interaction.deferUpdate();
 
-      // Wait 1 minute before sending the Fechar embed
-      await new Promise((resolve) => setTimeout(resolve, 60 * 1000));
-
-      // Now send the Fechar embed (only appears after Confirmar is clicked)
-      const fecharEmbed = new EmbedBuilder()
+      // Create confirmation embed
+      const confirmacaoEmbed = new EmbedBuilder()
         .setColor(COLOR)
         .setDescription(
-          "✨ **Atendimento Finalizado?**\n\n" +
-          "Se todas as etapas do leilão já foram concluídas e não há mais pendências, " +
-          "você pode encerrar este ticket com segurança.\n\n" +
-          "📌 **Antes de fechar, verifique se:**\n" +
-          "• O pagamento foi confirmado\n" +
-          "• O item já foi entregue\n" +
-          "• Todas as dúvidas foram resolvidas\n\n" +
-          `🔒 <@${OWNER_ID}> Clique no botão **Fechar** abaixo para encerrar o atendimento.\n\n` +
-          "Obrigado por utilizar nosso sistema de leilões 💎"
+          "✅ **Pagamento Confirmado!**\n\n" +
+          "O pagamento foi verificado e confirmado pelo leiloeiro.\n\n" +
+          "O leilão será iniciado em breve.\n\n" +
+          "Aguardem as próximas instruções!"
         )
         .setFooter({ text: "🔥 𝙎𝙣𝙞𝙥𝙚𝙭ˡᵘᵃ ᶜᵒᵐᵐᵘⁿⁱᵗʸ 👻" });
 
-      const closeRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId("btn-fechar")
-          .setLabel("Fechar")
-          .setStyle(ButtonStyle.Danger)
-      );
-
-      await interaction.channel.send({ embeds: [fecharEmbed], components: [closeRow] });
+      // Edit the original message to remove buttons and show confirmation
+      await interaction.message.edit({ 
+        embeds: [interaction.message.embeds[0], confirmacaoEmbed],
+        components: [] 
+      });
+      
       return;
     }
 
@@ -309,6 +315,21 @@ client.on("interactionCreate", async (interaction) => {
         )
         .setFooter({ text: "🔥 𝙎𝙣𝙞𝙥𝙚𝙭ˡᵘᵃ ᶜᵒᵐᵐᵘⁿⁱᵗʸ 👻" });
 
+      // Disable buttons and send closing message
+      const disabledRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("btn-confirmar")
+          .setLabel("Confirmar Pagamento")
+          .setStyle(ButtonStyle.Success)
+          .setDisabled(true),
+        new ButtonBuilder()
+          .setCustomId("btn-fechar")
+          .setLabel("Fechar")
+          .setStyle(ButtonStyle.Danger)
+          .setDisabled(true)
+      );
+
+      await interaction.message.edit({ components: [disabledRow] });
       await interaction.channel.send({ embeds: [closingEmbed] });
 
       tickets.delete(interaction.channelId);
