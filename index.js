@@ -26,7 +26,7 @@ const COLOR     = 0xb300ff;
 const IMAGE_URL = "https://cdn.discordapp.com/attachments/1381714599442649138/1490162386122965042/file_000000008870720e9825f146362ee8a53.png";
 
 // ─── Ticket store ─────────────────────────────────────────────────────────────
-// channelId → { creatorId }
+// channelId → { creatorId, paymentConfirmed }
 const tickets = new Map();
 
 // ─── Client ──────────────────────────────────────────────────────────────────
@@ -205,7 +205,7 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       console.log(`[TICKET] Created channel ${channel.id} (${channel.name}) for user ${creator.id}`);
-      tickets.set(channel.id, { creatorId: creator.id });
+      tickets.set(channel.id, { creatorId: creator.id, paymentConfirmed: false });
 
       const paymentEmbed = new EmbedBuilder()
         .setColor(COLOR)
@@ -252,25 +252,94 @@ client.on("interactionCreate", async (interaction) => {
 
       await interaction.deferUpdate();
 
+      // Marcar que o pagamento foi confirmado
+      const ticketData = tickets.get(interaction.channelId);
+      if (ticketData) {
+        ticketData.paymentConfirmed = true;
+        tickets.set(interaction.channelId, ticketData);
+      }
+
       const confirmacaoEmbed = new EmbedBuilder()
         .setColor(COLOR)
         .setDescription(
           "✅ **Pagamento Confirmado!**\n\n" +
           "O pagamento foi verificado e confirmado pelo leiloeiro.\n\n" +
           "O leilão será iniciado em breve.\n\n" +
-          "Aguardem as próximas instruções!"
+          "Aguardem as próximas instruções!\n\n" +
+          "━━━━━━━━━━━━━━━━━━\n\n" +
+          "🔘 Utilize o botão abaixo para fechar este ticket quando o leilão for finalizado."
         )
         .setFooter({ text: "🔥 𝙎𝙣𝙞𝙥𝙚𝙭ˡᵘᵃ ᶜᵒᵐᵐᵘⁿⁱᵗʸ 👻" });
 
+      // Criar nova linha de botões apenas com o botão Fechar
+      const closeButtonRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("btn-fechar-pos-confirmacao")
+          .setLabel("🔒 Fechar Ticket")
+          .setStyle(ButtonStyle.Danger)
+      );
+
+      // Atualizar a mensagem: remover botões antigos e adicionar apenas o de fechar
       await interaction.message.edit({ 
         embeds: [interaction.message.embeds[0], confirmacaoEmbed],
-        components: [] 
+        components: [closeButtonRow] 
       });
       
       return;
     }
 
-    // ── Button: Fechar (Felipe only) ─────────────────────────────────────────
+    // ── Button: Fechar após confirmação ─────────────────────────────────────
+    if (interaction.isButton() && interaction.customId === "btn-fechar-pos-confirmacao") {
+      if (interaction.user.id !== OWNER_ID) {
+        return interaction.reply({
+          content: "You are not allowed to use this button.",
+          ephemeral: true,
+        });
+      }
+
+      await interaction.deferUpdate();
+
+      const closingEmbed = new EmbedBuilder()
+        .setColor(COLOR)
+        .setDescription(
+          "🔒 **Ticket Encerrado**\n\n" +
+          "✅ Leilão finalizado com sucesso!\n\n" +
+          "📌 Todas as informações relacionadas ao leilão já foram registradas pelo sistema.\n\n" +
+          "🧾 Caso precise revisar algo futuramente, entre em contato com a equipe de suporte.\n\n" +
+          "Agradecemos por utilizar o sistema de leilões 💜\n\n" +
+          "⏳ O canal será excluído em instantes..."
+        )
+        .setFooter({ text: "🔥 𝙎𝙣𝙞𝙥𝙚𝙭ˡᵘᵃ ᶜᵒᵐᵐᵘⁿⁱᵗʸ 👻" });
+
+      // Desabilitar o botão de fechar
+      const disabledRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("btn-fechar-pos-confirmacao")
+          .setLabel("🔒 Fechar Ticket")
+          .setStyle(ButtonStyle.Danger)
+          .setDisabled(true)
+      );
+
+      await interaction.message.edit({ components: [disabledRow] });
+      await interaction.channel.send({ embeds: [closingEmbed] });
+
+      // Remover do mapa de tickets
+      tickets.delete(interaction.channelId);
+
+      // Aguardar 5 segundos e deletar o canal
+      setTimeout(async () => {
+        try {
+          await interaction.channel.delete();
+          console.log(`[TICKET] Channel ${interaction.channelId} deleted.`);
+        } catch (err) {
+          console.error("[ERROR] Failed to delete channel:", err.message);
+        }
+      }, 5000);
+
+      return;
+    }
+
+    // ── Button: Fechar original (antes da confirmação) ─────────────────────
     if (interaction.isButton() && interaction.customId === "btn-fechar") {
       if (interaction.user.id !== OWNER_ID) {
         return interaction.reply({
@@ -284,12 +353,10 @@ client.on("interactionCreate", async (interaction) => {
       const closingEmbed = new EmbedBuilder()
         .setColor(COLOR)
         .setDescription(
-          "🔒 **Encerramento do Ticket**\n\n" +
-          "Este ticket foi marcado para encerramento.\n\n" +
-          "📌 Todas as informações relacionadas ao leilão já foram registradas pelo sistema.\n\n" +
-          "🧾 Caso precise revisar algo futuramente, entre em contato com a equipe de suporte.\n\n" +
-          "Agradecemos por utilizar o sistema de leilões 💜\n\n" +
-          "⏳ O canal será fechado em instantes..."
+          "🔒 **Ticket Cancelado**\n\n" +
+          "❌ O ticket foi fechado antes da confirmação do pagamento.\n\n" +
+          "📌 Para abrir um novo leilão, utilize o painel novamente.\n\n" +
+          "⏳ O canal será excluído em instantes..."
         )
         .setFooter({ text: "🔥 𝙎𝙣𝙞𝙥𝙚𝙭ˡᵘᵃ ᶜᵒᵐᵐᵘⁿⁱᵗʸ 👻" });
 
