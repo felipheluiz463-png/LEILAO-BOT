@@ -22,6 +22,7 @@ const TOKEN     = process.env.TOKEN;
 const CLIENT_ID = "1488382349472305304";
 const OWNER_ID  = "1030955815114391592"; // Felipe | Kpax — only user allowed to run /setup-auction and use buttons
 const COLOR     = 0xb300ff;
+const CATEGORY_ID = "1301200179294113792"; // ID da categoria LEILÕES
 // URL SEM parâmetros de expiração (use o attachment ID direto)
 const IMAGE_URL = "https://cdn.discordapp.com/attachments/1381714599442649138/1490162386122965042/file_000000008870720e9825f146362ee8a53.png";
 
@@ -31,8 +32,56 @@ const tickets = new Map();
 
 // ─── Client ──────────────────────────────────────────────────────────────────
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
+
+// ─── Função para gerenciar a categoria ───────────────────────────────────────
+async function manageAuctionCategory(guild) {
+  try {
+    // Buscar a categoria
+    const category = guild.channels.cache.get(CATEGORY_ID);
+    if (!category) return;
+    
+    // Buscar todos os canais de leilão dentro da categoria
+    const auctionChannels = category.children.cache.filter(channel => 
+      tickets.has(channel.id) || channel.name.startsWith("leilao-")
+    );
+    
+    // Se não tiver nenhum canal de leilão, deletar a categoria
+    if (auctionChannels.size === 0) {
+      try {
+        await category.delete();
+        console.log(`[CATEGORY] Categoria LEILÕES deletada por estar vazia.`);
+      } catch (err) {
+        console.error("[ERROR] Falha ao deletar categoria:", err.message);
+      }
+    }
+  } catch (err) {
+    console.error("[ERROR] manageAuctionCategory:", err.message);
+  }
+}
+
+// ─── Função para criar ou restaurar categoria ─────────────────────────────────
+async function ensureAuctionCategory(guild) {
+  try {
+    let category = guild.channels.cache.get(CATEGORY_ID);
+    
+    // Se a categoria não existir, criar
+    if (!category) {
+      category = await guild.channels.create({
+        name: "LEILÕES",
+        type: ChannelType.GuildCategory,
+        position: 0,
+      });
+      console.log(`[CATEGORY] Categoria LEILÕES criada.`);
+    }
+    
+    return category;
+  } catch (err) {
+    console.error("[ERROR] ensureAuctionCategory:", err.message);
+    return null;
+  }
+}
 
 // ─── Register guild command helper ───────────────────────────────────────────
 async function registerCommandsForGuild(guild) {
@@ -50,7 +99,7 @@ async function registerCommandsForGuild(guild) {
 }
 
 // ─── Ready ───────────────────────────────────────────────────────────────────
-client.once("clientReady", async () => {
+client.once("ready", async () => {
   console.log(`[BOT] Logged in as ${client.user.tag}`);
 
   const rest = new REST().setToken(TOKEN);
@@ -63,11 +112,14 @@ client.once("clientReady", async () => {
 
   for (const guild of client.guilds.cache.values()) {
     await registerCommandsForGuild(guild);
+    // Verificar e gerenciar categoria existente
+    await manageAuctionCategory(guild);
   }
 });
 
 client.on("guildCreate", async (guild) => {
   await registerCommandsForGuild(guild);
+  await manageAuctionCategory(guild);
 });
 
 // ─── Single interactionCreate listener ───────────────────────────────────────
@@ -155,6 +207,12 @@ client.on("interactionCreate", async (interaction) => {
 
       await interaction.deferReply({ ephemeral: true });
 
+      // Garantir que a categoria existe
+      const category = await ensureAuctionCategory(guild);
+      if (!category) {
+        return interaction.editReply({ content: "❌ Erro ao criar/verificar a categoria de leilões." });
+      }
+
       const safeName = `leilao-${creator.username.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 20) || "user"}`;
 
       let channel;
@@ -162,6 +220,7 @@ client.on("interactionCreate", async (interaction) => {
         channel = await guild.channels.create({
           name: safeName,
           type: ChannelType.GuildText,
+          parent: category.id, // Colocar dentro da categoria
           permissionOverwrites: [
             {
               id: guild.roles.everyone.id,
@@ -175,6 +234,8 @@ client.on("interactionCreate", async (interaction) => {
                 PermissionFlagsBits.ViewChannel,
                 PermissionFlagsBits.SendMessages,
                 PermissionFlagsBits.ReadMessageHistory,
+                PermissionFlagsBits.AttachFiles, // Permissão para enviar arquivos
+                PermissionFlagsBits.EmbedLinks,   // Permissão para links embed
               ],
             },
             {
@@ -185,6 +246,8 @@ client.on("interactionCreate", async (interaction) => {
                 PermissionFlagsBits.SendMessages,
                 PermissionFlagsBits.ReadMessageHistory,
                 PermissionFlagsBits.ManageChannels,
+                PermissionFlagsBits.AttachFiles,
+                PermissionFlagsBits.EmbedLinks,
               ],
             },
             {
@@ -195,16 +258,18 @@ client.on("interactionCreate", async (interaction) => {
                 PermissionFlagsBits.SendMessages,
                 PermissionFlagsBits.ReadMessageHistory,
                 PermissionFlagsBits.ManageChannels,
+                PermissionFlagsBits.AttachFiles,
+                PermissionFlagsBits.EmbedLinks,
               ],
             },
           ],
         });
       } catch (err) {
         console.error("[ERROR] Failed to create ticket channel:", err);
-        return interaction.editReply({ content: "Erro ao criar o canal. Verifique as permissões do bot." });
+        return interaction.editReply({ content: "❌ Erro ao criar o canal. Verifique as permissões do bot." });
       }
 
-      console.log(`[TICKET] Created channel ${channel.id} (${channel.name}) for user ${creator.id}`);
+      console.log(`[TICKET] Created channel ${channel.id} (${channel.name}) in category for user ${creator.id}`);
       tickets.set(channel.id, { creatorId: creator.id, paymentConfirmed: false });
 
       const paymentEmbed = new EmbedBuilder()
@@ -221,7 +286,8 @@ client.on("interactionCreate", async (interaction) => {
           "━━━━━━━━━━━━━━━━━━\n\n" +
           "⚠️ **Aviso Importante**\n" +
           "> - Não envie comprovantes falsos.\n" +
-          "> - O leilão só será iniciado após a confirmação oficial do pagamento."
+          "> - O leilão só será iniciado após a confirmação oficial do pagamento.\n\n" +
+          "📎 **Você pode enviar imagens e arquivos neste canal para comprovar o pagamento.**"
         )
         .setFooter({ text: "🔥 𝙎𝙣𝙞𝙥𝙚𝙭ˡᵘᵃ ᶜᵒᵐᵐᵘⁿⁱᵗʸ 👻" });
 
@@ -331,6 +397,11 @@ client.on("interactionCreate", async (interaction) => {
         try {
           await interaction.channel.delete();
           console.log(`[TICKET] Channel ${interaction.channelId} deleted.`);
+          
+          // Após deletar o canal, verificar se a categoria pode ser removida
+          if (interaction.guild) {
+            await manageAuctionCategory(interaction.guild);
+          }
         } catch (err) {
           console.error("[ERROR] Failed to delete channel:", err.message);
         }
@@ -382,6 +453,11 @@ client.on("interactionCreate", async (interaction) => {
         try {
           await interaction.channel.delete();
           console.log(`[TICKET] Channel ${interaction.channelId} deleted.`);
+          
+          // Após deletar o canal, verificar se a categoria pode ser removida
+          if (interaction.guild) {
+            await manageAuctionCategory(interaction.guild);
+          }
         } catch (err) {
           console.error("[ERROR] Failed to delete channel:", err.message);
         }
