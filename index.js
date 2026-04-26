@@ -22,12 +22,12 @@ const TOKEN     = process.env.TOKEN;
 const CLIENT_ID = "1488382349472305304";
 const OWNER_ID  = "1030955815114391592"; // Felipe | Kpax — only user allowed to run /setup-auction and use buttons
 const COLOR     = 0xb300ff;
-const CATEGORY_ID = "1301200179294113792"; // ID da categoria LEILÕES
+const CATEGORY_ID = "1497799987986436117"; // ID da categoria LEILÕES
 const IMAGE_URL = "https://cdn.discordapp.com/attachments/1381714599442649138/1490162386122965042/file_000000008870720e9825f146362ee8a53.png";
 const QR_CODE_URL = "https://cdn.discordapp.com/attachments/1474630270148804780/1497803437121732768/17771743931142.jpg";
 
 // ─── Ticket store ─────────────────────────────────────────────────────────────
-// channelId → { creatorId, auctioneer, paymentConfirmed }
+// channelId → { creatorId, auctioneer, paymentConfirmed, paymentMessageId }
 const tickets = new Map();
 
 // ─── Client ──────────────────────────────────────────────────────────────────
@@ -265,7 +265,7 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       console.log(`[TICKET] Created channel ${channel.id} (${channel.name}) in category for user ${creator.id}`);
-      tickets.set(channel.id, { creatorId: creator.id, auctioneer: auctioneerId, paymentConfirmed: false });
+      tickets.set(channel.id, { creatorId: creator.id, auctioneer: auctioneerId, paymentConfirmed: false, paymentMessageId: null });
 
       // Embed principal do ticket - SEM IMAGEM
       const mainEmbed = new EmbedBuilder()
@@ -314,7 +314,7 @@ client.on("interactionCreate", async (interaction) => {
 
       await interaction.deferReply({ ephemeral: true });
 
-      // Embed de pagamento com QR Code
+      // Embed de pagamento com QR Code como thumbnail (canto direito)
       const paymentEmbed = new EmbedBuilder()
         .setColor(COLOR)
         .setTitle("💳 Pagamento da Taxa do Leilão")
@@ -322,17 +322,9 @@ client.on("interactionCreate", async (interaction) => {
           "━━━━━━━━━━━━━━━━━━\n\n" +
           "**💵 Chave Pix**\n" +
           "`a88da2f9-c136-41ec-86e5-9315312cd3dd`\n\n" +
-          "━━━━━━━━━━━━━━━━━━\n\n" +
-          "📌 **Instruções:**\n" +
-          "1. Abra seu aplicativo bancário\n" +
-          "2. Escolha pagar via Pix\n" +
-          "3. Cole a chave acima ou escaneie o QR Code\n" +
-          "4. Realize o pagamento de **50c**\n" +
-          "5. Após pagar, aguarde a confirmação do leiloeiro\n\n" +
-          "━━━━━━━━━━━━━━━━━━\n\n" +
-          "⚠️ **Importante:** Envie o comprovante neste canal após o pagamento."
+          "━━━━━━━━━━━━━━━━━━"
         )
-        .setImage(QR_CODE_URL)
+        .setThumbnail(QR_CODE_URL)
         .setFooter({ text: "🔥 𝙎𝙣𝙞𝙥𝙚𝙭ˡᵘᵃ ᶜᵒᵐᵐᵘⁿⁱᵗʸ 👻" });
 
       const confirmButtonRow = new ActionRowBuilder().addComponents(
@@ -342,13 +334,17 @@ client.on("interactionCreate", async (interaction) => {
           .setStyle(ButtonStyle.Success)
       );
 
-      await interaction.user.send({ 
+      const paymentMessage = await interaction.channel.send({ 
         embeds: [paymentEmbed], 
         components: [confirmButtonRow] 
       });
 
+      // Atualizar o ticket com o ID da mensagem de pagamento
+      ticketData.paymentMessageId = paymentMessage.id;
+      tickets.set(interaction.channelId, ticketData);
+
       await interaction.editReply({ 
-        content: "✅ Enviamos as instruções de pagamento na sua DM! Verifique suas mensagens privadas." 
+        content: "✅ Informações de pagamento enviadas neste canal!" 
       });
       return;
     }
@@ -370,13 +366,19 @@ client.on("interactionCreate", async (interaction) => {
       ticketData.paymentConfirmed = true;
       tickets.set(interaction.channelId, ticketData);
 
-      // Buscar o canal do ticket
-      const channel = interaction.client.channels.cache.get(interaction.channelId);
-      if (!channel) return;
+      // Deletar a mensagem de pagamento
+      try {
+        const paymentMessage = await interaction.channel.messages.fetch(ticketData.paymentMessageId);
+        if (paymentMessage) {
+          await paymentMessage.delete();
+        }
+      } catch (err) {
+        console.error("[ERROR] Failed to delete payment message:", err.message);
+      }
 
       // Buscar a mensagem principal no canal
-      const messages = await channel.messages.fetch({ limit: 10 });
-      const mainMessage = messages.find(msg => msg.author.id === client.user.id && msg.components.length > 0);
+      const messages = await interaction.channel.messages.fetch({ limit: 10 });
+      const mainMessage = messages.find(msg => msg.author.id === client.user.id && msg.components.length > 0 && msg.embeds.length > 0);
       
       if (mainMessage) {
         // Embed de confirmação
@@ -407,7 +409,7 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       // Enviar mensagem de confirmação no canal
-      await channel.send({ 
+      await interaction.channel.send({ 
         content: `✅ **Pagamento confirmado por** <@${interaction.user.id}>! O leilão será iniciado em breve.` 
       });
 
