@@ -23,11 +23,11 @@ const CLIENT_ID = "1488382349472305304";
 const OWNER_ID  = "1030955815114391592"; // Felipe | Kpax — only user allowed to run /setup-auction and use buttons
 const COLOR     = 0xb300ff;
 const CATEGORY_ID = "1301200179294113792"; // ID da categoria LEILÕES
-// URL SEM parâmetros de expiração (use o attachment ID direto)
 const IMAGE_URL = "https://cdn.discordapp.com/attachments/1381714599442649138/1490162386122965042/file_000000008870720e9825f146362ee8a53.png";
+const QR_CODE_URL = "https://cdn.discordapp.com/attachments/1474630270148804780/1497803437121732768/17771743931142.jpg";
 
 // ─── Ticket store ─────────────────────────────────────────────────────────────
-// channelId → { creatorId, paymentConfirmed }
+// channelId → { creatorId, auctioneer, paymentConfirmed }
 const tickets = new Map();
 
 // ─── Client ──────────────────────────────────────────────────────────────────
@@ -38,16 +38,13 @@ const client = new Client({
 // ─── Função para gerenciar a categoria ───────────────────────────────────────
 async function manageAuctionCategory(guild) {
   try {
-    // Buscar a categoria
     const category = guild.channels.cache.get(CATEGORY_ID);
     if (!category) return;
     
-    // Buscar todos os canais de leilão dentro da categoria
     const auctionChannels = category.children.cache.filter(channel => 
       tickets.has(channel.id) || channel.name.startsWith("leilao-")
     );
     
-    // Se não tiver nenhum canal de leilão, deletar a categoria
     if (auctionChannels.size === 0) {
       try {
         await category.delete();
@@ -61,12 +58,11 @@ async function manageAuctionCategory(guild) {
   }
 }
 
-// ─── Função para criar ou restaurar categoria ─────────────────────────────────
+// ─── Função para verificar categoria ─────────────────────────────────────────
 async function ensureAuctionCategory(guild) {
   try {
     let category = guild.channels.cache.get(CATEGORY_ID);
     
-    // Se a categoria não existir, criar
     if (!category) {
       category = await guild.channels.create({
         name: "LEILÕES",
@@ -112,7 +108,6 @@ client.once("ready", async () => {
 
   for (const guild of client.guilds.cache.values()) {
     await registerCommandsForGuild(guild);
-    // Verificar e gerenciar categoria existente
     await manageAuctionCategory(guild);
   }
 });
@@ -186,6 +181,7 @@ client.on("interactionCreate", async (interaction) => {
 
       const guild   = interaction.guild;
       const creator = interaction.user;
+      const auctioneerId = OWNER_ID; // Leiloeiro fixo
 
       if (!guild) {
         console.error("[ERROR] interaction.guild is null on select menu");
@@ -207,7 +203,6 @@ client.on("interactionCreate", async (interaction) => {
 
       await interaction.deferReply({ ephemeral: true });
 
-      // Garantir que a categoria existe
       const category = await ensureAuctionCategory(guild);
       if (!category) {
         return interaction.editReply({ content: "❌ Erro ao criar/verificar a categoria de leilões." });
@@ -220,7 +215,7 @@ client.on("interactionCreate", async (interaction) => {
         channel = await guild.channels.create({
           name: safeName,
           type: ChannelType.GuildText,
-          parent: category.id, // Colocar dentro da categoria
+          parent: category.id,
           permissionOverwrites: [
             {
               id: guild.roles.everyone.id,
@@ -234,12 +229,12 @@ client.on("interactionCreate", async (interaction) => {
                 PermissionFlagsBits.ViewChannel,
                 PermissionFlagsBits.SendMessages,
                 PermissionFlagsBits.ReadMessageHistory,
-                PermissionFlagsBits.AttachFiles, // Permissão para enviar arquivos
-                PermissionFlagsBits.EmbedLinks,   // Permissão para links embed
+                PermissionFlagsBits.AttachFiles,
+                PermissionFlagsBits.EmbedLinks,
               ],
             },
             {
-              id: OWNER_ID,
+              id: auctioneerId,
               type: OverwriteType.Member,
               allow: [
                 PermissionFlagsBits.ViewChannel,
@@ -270,19 +265,18 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       console.log(`[TICKET] Created channel ${channel.id} (${channel.name}) in category for user ${creator.id}`);
-      tickets.set(channel.id, { creatorId: creator.id, paymentConfirmed: false });
+      tickets.set(channel.id, { creatorId: creator.id, auctioneer: auctioneerId, paymentConfirmed: false });
 
-      const paymentEmbed = new EmbedBuilder()
+      // Embed principal do ticket - SEM IMAGEM
+      const mainEmbed = new EmbedBuilder()
         .setColor(COLOR)
-        .setTitle("💳 Pagamento da Taxa do Leilão")
+        .setTitle("💳 Taxa do Leilão")
         .setDescription(
           "━━━━━━━━━━━━━━━━━━\n\n" +
-          "Para iniciar seu leilão, realize o pagamento da taxa utilizando o Pix abaixo:\n\n" +
-          "💵 **Chave Pix**\n" +
-          "`a88da2f9-c136-41ec-86e5-9315312cd3dd`\n\n" +
+          "Para iniciar seu leilão, é necessário realizar o pagamento da taxa clicando no botão 💳 Pagar Taxa abaixo.\n\n" +
           "━━━━━━━━━━━━━━━━━━\n\n" +
-          "📌 Após efetuar o pagamento, aguarde a confirmação do **Leiloeiro**.\n\n" +
-          "✅ O botão **Confirmar Pagamento** será utilizado apenas pelo leiloeiro após verificar o recebimento.\n\n" +
+          "📌 Após efetuar o pagamento, aguarde a confirmação do Leiloeiro.\n\n" +
+          "✅ O botão Confirmar Pagamento será utilizado apenas pelo leiloeiro após verificar o recebimento.\n\n" +
           "━━━━━━━━━━━━━━━━━━\n\n" +
           "⚠️ **Aviso Importante**\n" +
           "> - Não envie comprovantes falsos.\n" +
@@ -291,74 +285,142 @@ client.on("interactionCreate", async (interaction) => {
         )
         .setFooter({ text: "🔥 𝙎𝙣𝙞𝙥𝙚𝙭ˡᵘᵃ ᶜᵒᵐᵐᵘⁿⁱᵗʸ 👻" });
 
-      const buttonRow = new ActionRowBuilder().addComponents(
+      const payButtonRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId("btn-confirmar")
-          .setLabel("Confirmar Pagamento")
-          .setStyle(ButtonStyle.Success),
-        new ButtonBuilder()
-          .setCustomId("btn-fechar")
-          .setLabel("Fechar")
-          .setStyle(ButtonStyle.Danger)
+          .setCustomId("btn-pagar-taxa")
+          .setLabel("💳 Pagar Taxa")
+          .setStyle(ButtonStyle.Success)
       );
 
-      await channel.send({ content: `<@${creator.id}> <@${OWNER_ID}>`, embeds: [paymentEmbed], components: [buttonRow] });
+      await channel.send({ 
+        content: `<@${creator.id}> <@${auctioneerId}>`, 
+        embeds: [mainEmbed], 
+        components: [payButtonRow] 
+      });
+      
       await interaction.editReply({ content: `✅ Ticket criado: <#${channel.id}>` });
       return;
     }
 
-    // ── Button: Confirmar (Felipe only) ─────────────────────────────────────
-    if (interaction.isButton() && interaction.customId === "btn-confirmar") {
-      if (interaction.user.id !== OWNER_ID) {
+    // ── Button: Pagar Taxa ───────────────────────────────────────────────────
+    if (interaction.isButton() && interaction.customId === "btn-pagar-taxa") {
+      const ticketData = tickets.get(interaction.channelId);
+      if (!ticketData || ticketData.creatorId !== interaction.user.id) {
         return interaction.reply({
-          content: "You are not allowed to use this button.",
+          content: "❌ Você não tem permissão para usar este botão.",
+          ephemeral: true,
+        });
+      }
+
+      await interaction.deferReply({ ephemeral: true });
+
+      // Embed de pagamento com QR Code
+      const paymentEmbed = new EmbedBuilder()
+        .setColor(COLOR)
+        .setTitle("💳 Pagamento da Taxa do Leilão")
+        .setDescription(
+          "━━━━━━━━━━━━━━━━━━\n\n" +
+          "**💵 Chave Pix**\n" +
+          "`a88da2f9-c136-41ec-86e5-9315312cd3dd`\n\n" +
+          "━━━━━━━━━━━━━━━━━━\n\n" +
+          "📌 **Instruções:**\n" +
+          "1. Abra seu aplicativo bancário\n" +
+          "2. Escolha pagar via Pix\n" +
+          "3. Cole a chave acima ou escaneie o QR Code\n" +
+          "4. Realize o pagamento de **50c**\n" +
+          "5. Após pagar, aguarde a confirmação do leiloeiro\n\n" +
+          "━━━━━━━━━━━━━━━━━━\n\n" +
+          "⚠️ **Importante:** Envie o comprovante neste canal após o pagamento."
+        )
+        .setImage(QR_CODE_URL)
+        .setFooter({ text: "🔥 𝙎𝙣𝙞𝙥𝙚𝙭ˡᵘᵃ ᶜᵒᵐᵐᵘⁿⁱᵗʸ 👻" });
+
+      const confirmButtonRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("btn-confirmar-pagamento")
+          .setLabel("💵 Confirmar")
+          .setStyle(ButtonStyle.Success)
+      );
+
+      await interaction.user.send({ 
+        embeds: [paymentEmbed], 
+        components: [confirmButtonRow] 
+      });
+
+      await interaction.editReply({ 
+        content: "✅ Enviamos as instruções de pagamento na sua DM! Verifique suas mensagens privadas." 
+      });
+      return;
+    }
+
+    // ── Button: Confirmar Pagamento (apenas leiloeiro) ──────────────────────
+    if (interaction.isButton() && interaction.customId === "btn-confirmar-pagamento") {
+      const ticketData = tickets.get(interaction.channelId);
+      
+      // Verificar se é o leiloeiro correto
+      if (!ticketData || interaction.user.id !== ticketData.auctioneer) {
+        return interaction.reply({
+          content: "❌ Você não tem permissão para confirmar este pagamento.",
           ephemeral: true,
         });
       }
 
       await interaction.deferUpdate();
 
-      // Marcar que o pagamento foi confirmado
-      const ticketData = tickets.get(interaction.channelId);
-      if (ticketData) {
-        ticketData.paymentConfirmed = true;
-        tickets.set(interaction.channelId, ticketData);
+      ticketData.paymentConfirmed = true;
+      tickets.set(interaction.channelId, ticketData);
+
+      // Buscar o canal do ticket
+      const channel = interaction.client.channels.cache.get(interaction.channelId);
+      if (!channel) return;
+
+      // Buscar a mensagem principal no canal
+      const messages = await channel.messages.fetch({ limit: 10 });
+      const mainMessage = messages.find(msg => msg.author.id === client.user.id && msg.components.length > 0);
+      
+      if (mainMessage) {
+        // Embed de confirmação
+        const confirmacaoEmbed = new EmbedBuilder()
+          .setColor(COLOR)
+          .setTitle("✅ Pagamento Confirmado!")
+          .setDescription(
+            "━━━━━━━━━━━━━━━━━━\n\n" +
+            "**O pagamento foi verificado e confirmado pelo leiloeiro.**\n\n" +
+            "O leilão será iniciado em breve.\n\n" +
+            "Aguardem as próximas instruções!\n\n" +
+            "━━━━━━━━━━━━━━━━━━\n\n" +
+            "🔘 Utilize o botão abaixo para **encerrar o leilão** quando finalizado."
+          )
+          .setFooter({ text: "🔥 𝙎𝙣𝙞𝙥𝙚𝙭ˡᵘᵃ ᶜᵒᵐᵐᵘⁿⁱᵗʸ 👻" });
+
+        const closeButtonRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId("btn-fechar-leilao")
+            .setLabel("🔴 Fechar")
+            .setStyle(ButtonStyle.Danger)
+        );
+
+        await mainMessage.edit({ 
+          embeds: [mainMessage.embeds[0], confirmacaoEmbed],
+          components: [closeButtonRow] 
+        });
       }
 
-      const confirmacaoEmbed = new EmbedBuilder()
-        .setColor(COLOR)
-        .setDescription(
-          "✅ **Pagamento Confirmado!**\n\n" +
-          "O pagamento foi verificado e confirmado pelo leiloeiro.\n\n" +
-          "O leilão será iniciado em breve.\n\n" +
-          "Aguardem as próximas instruções!\n\n" +
-          "━━━━━━━━━━━━━━━━━━\n\n" +
-          "🔘 Utilize o botão abaixo para fechar este ticket quando o leilão for finalizado."
-        )
-        .setFooter({ text: "🔥 𝙎𝙣𝙞𝙥𝙚𝙭ˡᵘᵃ ᶜᵒᵐᵐᵘⁿⁱᵗʸ 👻" });
-
-      // Criar nova linha de botões apenas com o botão Fechar
-      const closeButtonRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId("btn-fechar-pos-confirmacao")
-          .setLabel("🔒 Fechar Ticket")
-          .setStyle(ButtonStyle.Danger)
-      );
-
-      // Atualizar a mensagem: remover botões antigos e adicionar apenas o de fechar
-      await interaction.message.edit({ 
-        embeds: [interaction.message.embeds[0], confirmacaoEmbed],
-        components: [closeButtonRow] 
+      // Enviar mensagem de confirmação no canal
+      await channel.send({ 
+        content: `✅ **Pagamento confirmado por** <@${interaction.user.id}>! O leilão será iniciado em breve.` 
       });
-      
+
       return;
     }
 
-    // ── Button: Fechar após confirmação ─────────────────────────────────────
-    if (interaction.isButton() && interaction.customId === "btn-fechar-pos-confirmacao") {
-      if (interaction.user.id !== OWNER_ID) {
+    // ── Button: Fechar Leilão (após confirmação) ────────────────────────────
+    if (interaction.isButton() && interaction.customId === "btn-fechar-leilao") {
+      const ticketData = tickets.get(interaction.channelId);
+      
+      if (!ticketData || interaction.user.id !== ticketData.auctioneer) {
         return interaction.reply({
-          content: "You are not allowed to use this button.",
+          content: "❌ Você não tem permissão para fechar este leilão.",
           ephemeral: true,
         });
       }
@@ -377,69 +439,10 @@ client.on("interactionCreate", async (interaction) => {
         )
         .setFooter({ text: "🔥 𝙎𝙣𝙞𝙥𝙚𝙭ˡᵘᵃ ᶜᵒᵐᵐᵘⁿⁱᵗʸ 👻" });
 
-      // Desabilitar o botão de fechar
       const disabledRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId("btn-fechar-pos-confirmacao")
-          .setLabel("🔒 Fechar Ticket")
-          .setStyle(ButtonStyle.Danger)
-          .setDisabled(true)
-      );
-
-      await interaction.message.edit({ components: [disabledRow] });
-      await interaction.channel.send({ embeds: [closingEmbed] });
-
-      // Remover do mapa de tickets
-      tickets.delete(interaction.channelId);
-
-      // Aguardar 5 segundos e deletar o canal
-      setTimeout(async () => {
-        try {
-          await interaction.channel.delete();
-          console.log(`[TICKET] Channel ${interaction.channelId} deleted.`);
-          
-          // Após deletar o canal, verificar se a categoria pode ser removida
-          if (interaction.guild) {
-            await manageAuctionCategory(interaction.guild);
-          }
-        } catch (err) {
-          console.error("[ERROR] Failed to delete channel:", err.message);
-        }
-      }, 5000);
-
-      return;
-    }
-
-    // ── Button: Fechar original (antes da confirmação) ─────────────────────
-    if (interaction.isButton() && interaction.customId === "btn-fechar") {
-      if (interaction.user.id !== OWNER_ID) {
-        return interaction.reply({
-          content: "You are not allowed to use this button.",
-          ephemeral: true,
-        });
-      }
-
-      await interaction.deferUpdate();
-
-      const closingEmbed = new EmbedBuilder()
-        .setColor(COLOR)
-        .setDescription(
-          "🔒 **Ticket Cancelado**\n\n" +
-          "❌ O ticket foi fechado antes da confirmação do pagamento.\n\n" +
-          "📌 Para abrir um novo leilão, utilize o painel novamente.\n\n" +
-          "⏳ O canal será excluído em instantes..."
-        )
-        .setFooter({ text: "🔥 𝙎𝙣𝙞𝙥𝙚𝙭ˡᵘᵃ ᶜᵒᵐᵐᵘⁿⁱᵗʸ 👻" });
-
-      const disabledRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId("btn-confirmar")
-          .setLabel("Confirmar Pagamento")
-          .setStyle(ButtonStyle.Success)
-          .setDisabled(true),
-        new ButtonBuilder()
-          .setCustomId("btn-fechar")
-          .setLabel("Fechar")
+          .setCustomId("btn-fechar-leilao")
+          .setLabel("🔴 Fechar")
           .setStyle(ButtonStyle.Danger)
           .setDisabled(true)
       );
@@ -454,7 +457,6 @@ client.on("interactionCreate", async (interaction) => {
           await interaction.channel.delete();
           console.log(`[TICKET] Channel ${interaction.channelId} deleted.`);
           
-          // Após deletar o canal, verificar se a categoria pode ser removida
           if (interaction.guild) {
             await manageAuctionCategory(interaction.guild);
           }
