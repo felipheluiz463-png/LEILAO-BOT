@@ -22,7 +22,7 @@ const TOKEN     = process.env.TOKEN;
 const CLIENT_ID = "1488382349472305304";
 const OWNER_ID  = "1030955815114391592";
 const COLOR     = 0xb300ff;
-const CATEGORY_ID = "1497799987986436117";
+const CATEGORY_ID = "1497815549432827974"; // ID da categoria LEILÕES (nova)
 const IMAGE_URL = "https://cdn.discordapp.com/attachments/1381714599442649138/1490162386122965042/file_000000008870720e9825f146362ee8a53.png";
 const QR_CODE_URL = "https://cdn.discordapp.com/attachments/1474630270148804780/1497814586684866560/Screenshot_2026-04-26-00-18-21-340_br.com.intermedium.jpg";
 
@@ -34,30 +34,7 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
 
-// ─── Função para gerenciar a categoria ───────────────────────────────────────
-async function manageAuctionCategory(guild) {
-  try {
-    const category = guild.channels.cache.get(CATEGORY_ID);
-    if (!category) return;
-    
-    const auctionChannels = category.children.cache.filter(channel => 
-      tickets.has(channel.id) || channel.name.startsWith("leilao-")
-    );
-    
-    if (auctionChannels.size === 0) {
-      try {
-        await category.delete();
-        console.log(`[CATEGORY] Categoria LEILÕES deletada por estar vazia.`);
-      } catch (err) {
-        console.error("[ERROR] Falha ao deletar categoria:", err.message);
-      }
-    }
-  } catch (err) {
-    console.error("[ERROR] manageAuctionCategory:", err.message);
-  }
-}
-
-// ─── Função para verificar categoria ─────────────────────────────────────────
+// ─── Função para garantir que a categoria existe ─────────────────────────────
 async function ensureAuctionCategory(guild) {
   try {
     let category = guild.channels.cache.get(CATEGORY_ID);
@@ -107,13 +84,14 @@ client.once("ready", async () => {
 
   for (const guild of client.guilds.cache.values()) {
     await registerCommandsForGuild(guild);
-    await manageAuctionCategory(guild);
+    // Garantir que a categoria existe
+    await ensureAuctionCategory(guild);
   }
 });
 
 client.on("guildCreate", async (guild) => {
   await registerCommandsForGuild(guild);
-  await manageAuctionCategory(guild);
+  await ensureAuctionCategory(guild);
 });
 
 // ─── Single interactionCreate listener ───────────────────────────────────────
@@ -445,10 +423,7 @@ client.on("interactionCreate", async (interaction) => {
         try {
           await interaction.channel.delete();
           console.log(`[TICKET] Channel ${interaction.channelId} deleted.`);
-          
-          if (interaction.guild) {
-            await manageAuctionCategory(interaction.guild);
-          }
+          // A categoria NÃO é deletada, apenas o canal
         } catch (err) {
           console.error("[ERROR] Failed to delete channel:", err.message);
         }
